@@ -1,57 +1,122 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Clock, CheckCircle2, AlertCircle } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { AlertCircle, CheckCircle2, Clock, Loader2 } from 'lucide-react';
+
+export interface JobUpdate {
+  status?: string;
+  progress?: number;
+  error?: string;
+  [key: string]: unknown;
+}
 
 interface ProgressTrackerProps {
   jobId: string;
+  label?: string;
   initialProgress?: number;
+  onUpdate?: (jobId: string, update: JobUpdate) => void;
 }
 
-export default function ProgressTracker({ jobId, initialProgress = 0 }: ProgressTrackerProps) {
-  const [progress, setProgress] = useState(initialProgress);
+const STATUS = {
+  uploaded: { label: 'Uploaded', text: 'text-neutral-600', bar: 'bg-neutral-400', Icon: Clock, spin: false },
+  processing: { label: 'Processing', text: 'text-blue-700', bar: 'bg-blue-600', Icon: Loader2, spin: true },
+  completed: { label: 'Completed', text: 'text-emerald-700', bar: 'bg-emerald-600', Icon: CheckCircle2, spin: false },
+  failed: { label: 'Failed', text: 'text-red-700', bar: 'bg-red-600', Icon: AlertCircle, spin: false },
+} as const;
+
+const clamp = (n: number) => Math.min(100, Math.max(0, Math.round(n)));
+
+export default function ProgressTracker({ jobId, label, initialProgress = 0, onUpdate }: ProgressTrackerProps) {
+  const [progress, setProgress] = useState(clamp(initialProgress));
   const [status, setStatus] = useState<string>('uploaded');
+  const [errorText, setErrorText] = useState<string | null>(null);
+  const [offline, setOffline] = useState(false);
+
+  const onUpdateRef = useRef(onUpdate);
+  useEffect(() => {
+    onUpdateRef.current = onUpdate;
+  });
 
   useEffect(() => {
-    const pollStatus = async () => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let failures = 0;
+
+    const poll = async () => {
+      let finished = false;
       try {
         const res = await fetch(`/api/process/${jobId}`);
-        if (res.ok) {
-          const data = await res.json();
-          setProgress(data.progress);
-          setStatus(data.status);
-        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data: JobUpdate = await res.json();
+        if (cancelled) return;
+
+        failures = 0;
+        setOffline(false);
+        if (typeof data.progress === 'number') setProgress(clamp(data.progress));
+        if (typeof data.status === 'string') setStatus(data.status);
+        setErrorText(typeof data.error === 'string' ? data.error : null);
+        onUpdateRef.current?.(jobId, data);
+        finished = data.status === 'completed' || data.status === 'failed';
       } catch {
-        // Silent fail, will retry
+        if (cancelled) return;
+        failures += 1;
+        setOffline(true);
+      }
+
+      // Stop polling once the job is done; back off while the server is unreachable.
+      if (!cancelled && !finished) {
+        const delay = Math.min(2000 * 2 ** Math.min(failures, 3), 10000);
+        timer = setTimeout(poll, delay);
       }
     };
 
-    const interval = setInterval(pollStatus, 2000);
-    pollStatus();
-    return () => clearInterval(interval);
+    poll();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [jobId]);
 
-  const statusConfig: Record<string, { color: string; icon: React.ReactNode; label: string }> = {
-    uploaded: { color: 'text-blue-600', icon: <Clock size={16} />, label: 'Uploaded' },
-    processing: { color: 'text-blue-600', icon: <Clock size={16} className="animate-spin" />, label: 'Processing' },
-    completed: { color: 'text-green-600', icon: <CheckCircle2 size={16} />, label: 'Completed' },
-    failed: { color: 'text-red-600', icon: <AlertCircle size={16} />, label: 'Failed' },
-  };
-
-  const config = statusConfig[status] || statusConfig.uploaded;
+  const config = STATUS[status as keyof typeof STATUS] ?? STATUS.uploaded;
+  const shown = status === 'completed' ? 100 : progress;
+  const { Icon } = config;
 
   return (
-    <div className="mt-3 space-y-2">
-      <div className="flex justify-between text-xs mb-1">
-        <span className="text-gray-500">{config.label}</span>
-        <span className="text-gray-500">{progress}%</span>
+    <div className="mt-3">
+      <div className="mb-1.5 flex items-center justify-between text-xs">
+        <span className={`inline-flex items-center gap-1.5 font-medium ${config.text}`}>
+          <Icon size={14} aria-hidden="true" className={config.spin ? 'animate-spin' : undefined} />
+          {config.label}
+        </span>
+        <span className="tabular-nums text-neutral-500">{shown}%</span>
       </div>
-      <div className="w-full bg-gray-200 rounded-full h-2">
+
+      <div
+        role="progressbar"
+        aria-label={label ? `Progress for ${label}` : 'Processing progress'}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={shown}
+        className="h-1.5 w-full overflow-hidden rounded-full bg-neutral-200"
+      >
         <div
-          className={`h-2 rounded-full transition-all duration-500 ${config.color.replace('text-', 'bg-')}`}
-          style={{ width: `${progress}%` }}
+          className={`h-full rounded-full transition-all duration-500 ${config.bar}`}
+          style={{ width: `${shown}%` }}
         />
       </div>
+
+      {status === 'failed' && (
+        <p className="mt-2 text-xs text-red-700">{errorText ?? 'Processing failed. Try uploading the file again.'}</p>
+      )}
+      {offline && status !== 'completed' && status !== 'failed' && (
+        <p className="mt-2 text-xs text-amber-800">Can’t reach the server. Retrying…</p>
+      )}
+
+      {/* Announces status changes only (not every percentage tick). */}
+      <span role="status" className="sr-only">
+        {label ? `${label}: ` : ''}
+        {config.label}
+      </span>
     </div>
   );
 }
