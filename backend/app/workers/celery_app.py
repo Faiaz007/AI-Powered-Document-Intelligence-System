@@ -2,10 +2,17 @@
 
 from celery import Celery
 
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+_REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6380/0")
+
 celery_app = Celery(
     "docintel",
-    broker="redis://localhost:6379/0",
-    backend="redis://localhost:6379/0",
+    broker=_REDIS_URL,
+    backend=_REDIS_URL,
     include=["app.workers.tasks"],
 )
 

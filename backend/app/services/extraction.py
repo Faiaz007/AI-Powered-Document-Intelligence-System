@@ -25,6 +25,8 @@ except ImportError:
     _OPENAI_AVAILABLE = False
 
 
+from app.core.config import GEMINI_MODEL
+
 def _get_llm_client():
     """Initialize and return an LLM client based on available API keys."""
     gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
@@ -32,7 +34,7 @@ def _get_llm_client():
 
     if _GEMINI_AVAILABLE and gemini_key:
         genai.configure(api_key=gemini_key)
-        return ("gemini", genai.GenerativeModel("gemini-1.5-flash"))
+        return ("gemini", genai.GenerativeModel(GEMINI_MODEL))
 
     if _OPENAI_AVAILABLE and openai_key:
         return ("openai", OpenAI(api_key=openai_key))
@@ -185,7 +187,7 @@ def extract_invoice_info(text: str) -> dict:
     prompt = _build_prompt(text)
 
     try:
-        response_text = call_llm(prompt, model="gemini-1.5-flash", temperature=0)
+        response_text = call_llm(prompt, model=GEMINI_MODEL, temperature=0)
     except Exception:
         return {
             "invoice_number": None,

@@ -14,7 +14,7 @@ def test_celery_app_importable():
     """Celery app should be importable."""
     from app.workers.celery_app import celery_app
     assert celery_app is not None
-    assert celery_app.conf.broker_url == "redis://localhost:6379/0"
+    assert celery_app.conf.broker_url == "redis://localhost:6380/0"
 
 
 def test_task_importable():

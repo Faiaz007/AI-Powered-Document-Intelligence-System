@@ -73,7 +73,7 @@ npm install
 Create `.env` in the backend directory:
 
 ```env
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/docintel
+DATABASE_URL=postgresql://postgres@localhost:5434/docintel
 REDIS_URL=redis://localhost:6379/0
 GEMINI_API_KEY=your_gemini_api_key
 OPENAI_API_KEY=your_openai_api_key

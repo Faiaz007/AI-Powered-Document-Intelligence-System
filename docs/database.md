@@ -93,7 +93,7 @@ WITH (lists = 100);
 ## Connection String
 
 ```
-postgresql://postgres:postgres@localhost:5432/docintel
+postgresql://postgres:postgres@localhost:5434/docintel
 ```
 
 Set via `DATABASE_URL` environment variable.

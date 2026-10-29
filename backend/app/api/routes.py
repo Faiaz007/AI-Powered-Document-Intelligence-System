@@ -25,7 +25,7 @@ from app.services import ocr as ocr_service
 from app.services import spreadsheet as spreadsheet_service
 from app.services import extraction as extraction_service
 from app.services import validation as validation_service
-from app.workers.celery_app import celery_app
+from app.workers.tasks import process_document_task
 
 router = APIRouter()
 
@@ -106,10 +106,7 @@ async def upload_documents(
         document_id = await db.create_document(upload_file.filename, file_type)
 
         # Enqueue Celery task
-        celery_app.send_task(
-            "app.workers.tasks.process_document_task",
-            args=[str(document_id), str(file_path), file_type],
-        )
+        process_document_task.delay(str(document_id), str(file_path), file_type)
 
         job_ids.append(document_id)
         filenames.append(upload_file.filename)
@@ -198,6 +195,26 @@ async def search_documents(q: str, limit: int = 10):
         return []
 
     results = await db.search_documents(q.strip(), limit=limit)
+
+    # Semantic search (best-effort)
+    try:
+        import os, google.generativeai as genai
+        key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if key:
+            genai.configure(api_key=key)
+            resp = genai.embed_content(model="models/text-embedding-004", content=q.strip())
+            emb = resp.get("embedding") if isinstance(resp, dict) else getattr(resp, "embedding", None)
+            if emb:
+                semantic = await db.search_similar(emb, limit=limit)
+                seen = {r["document_id"] for r in results}
+                for r in semantic:
+                    if r["document_id"] not in seen:
+                        results.append(r)
+                        seen.add(r["document_id"])
+    except Exception:
+        pass
+
+    results = results[:limit]
     return [
         SearchResult(
             document_id=r["document_id"],
@@ -271,9 +288,6 @@ async def reprocess_job(job_id: UUID, background_tasks: BackgroundTasks):
     await db.update_document_status(job_id, "uploaded")
 
     # Re-enqueue task
-    celery_app.send_task(
-        "app.workers.tasks.process_document_task",
-        args=[str(job_id), file_path, doc["file_type"]],
-    )
+    process_document_task.delay(str(job_id), file_path, doc["file_type"])
 
     return {"status": "reprocessing", "job_id": job_id}

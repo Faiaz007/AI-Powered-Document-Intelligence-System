@@ -1,6 +1,7 @@
 """Database service layer using asyncpg with connection pooling."""
 
 import os
+import json
 from typing import List, Optional, Dict, Any
 from uuid import UUID
 from decimal import Decimal
@@ -12,13 +13,12 @@ import asyncpg
 _pool: Optional[asyncpg.Pool] = None
 
 
+from app.core.config import DATABASE_URL as _DATABASE_URL
+
 async def init_pool() -> None:
     """Initialize the PostgreSQL connection pool."""
     global _pool
-    database_url = os.getenv(
-        "DATABASE_URL",
-        "postgresql://postgres:postgres@localhost:5432/docintel",
-    )
+    database_url = os.getenv("DATABASE_URL", _DATABASE_URL)
     _pool = await asyncpg.create_pool(database_url, min_size=2, max_size=10)
 
 
@@ -158,7 +158,7 @@ async def save_structured_results(document_id: UUID, data: dict) -> None:
             data.get("tax"),
             data.get("total"),
             data.get("currency", "USD"),
-            data.get("line_items", []),
+            json.dumps(data.get("line_items", [])),
             data.get("confidence", 0.0),
         )
 
@@ -175,7 +175,15 @@ async def get_structured_results(document_id: UUID) -> Optional[dict]:
             """,
             document_id,
         )
-        return dict(row) if row else None
+        if not row:
+            return None
+        result = dict(row)
+        if isinstance(result.get("line_items"), str):
+            try:
+                result["line_items"] = json.loads(result["line_items"])
+            except (json.JSONDecodeError, TypeError):
+                result["line_items"] = []
+        return result
 
 
 # --- Validation errors ---
@@ -311,7 +319,32 @@ async def search_documents(
         return results[:limit]
 
 
-# --- Full results ---
+async def search_similar(embedding: List[float], limit: int = 10) -> List[dict]:
+    """Semantic search over document embeddings using cosine distance."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT d.id, d.filename, d.file_type,
+                   1 - (de.embedding <=> $1::vector) AS score
+            FROM document_embeddings de
+            JOIN documents d ON d.id = de.id
+            ORDER BY de.embedding <=> $1::vector
+            LIMIT $2
+            """,
+            embedding,
+            limit,
+        )
+        return [
+            {
+                "document_id": r["id"],
+                "filename": r["filename"],
+                "file_type": r["file_type"],
+                "score": float(r["score"]) if r["score"] is not None else 0.0,
+                "matched_fields": ["semantic"],
+            }
+            for r in rows
+        ]
 
 async def get_document_full_results(document_id: UUID) -> Optional[dict]:
     """Fetch complete document data: metadata, text, structured results, errors."""
